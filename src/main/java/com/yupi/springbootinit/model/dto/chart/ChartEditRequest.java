@@ -45,32 +45,6 @@ public class ChartEditRequest implements Serializable {
      */
     private String genChart;
 
-    /**
-     * 生成的分析结论
-     */
-    private String genResult;
-
-    /**
-     * 创建用户id
-     */
-    private Long userId;
-
-    /**
-     * 创建时间
-     */
-    private Date createTime;
-
-    /**
-     * 更新时间
-     */
-    private Date updateTime;
-
-    /**
-     * 是否删除
-     */
-    @TableLogic
-    private Integer isDelete;
-
     @TableField(exist = false)
     private static final long serialVersionUID = 1L;
 }
