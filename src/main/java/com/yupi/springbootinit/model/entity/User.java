@@ -35,15 +35,6 @@ public class User implements Serializable {
      */
     private String userPassword;
 
-    /**
-     * 开放平台id
-     */
-    private String unionId;
-
-    /**
-     * 公众号openId
-     */
-    private String mpOpenId;
 
     /**
      * 用户昵称
@@ -55,10 +46,7 @@ public class User implements Serializable {
      */
     private String userAvatar;
 
-    /**
-     * 用户简介
-     */
-    private String userProfile;
+
 
     /**
      * 用户角色：user/admin/ban

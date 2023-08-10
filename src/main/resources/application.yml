@@ -21,17 +21,21 @@ spring:
   # todo 需替换配置
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
+#    url: jdbc:mysql://sh-cynosdbmysql-grp-akd7xwv2.sql.tencentcdb.com:24277/dbi
     url: jdbc:mysql://localhost:3306/dbi
+    #sh-cynosdbmysql-grp-akd7xwv2.sql.tencentcdb.com
+
     username: root
     password: root
   # Redis 配置
   # todo 需替换配置，然后取消注释
-#  redis:
-#    database: 1
-#    host: localhost
-#    port: 6379
-#    timeout: 5000
+  redis:
+    database: 1
+    host: 192.168.66.100
+    port: 6379
+    timeout: 5000
 #    password: 123456
+  #    password: 123456
   # Elasticsearch 配置
   # todo 需替换配置，然后取消注释
 #  elasticsearch:
@@ -43,6 +47,12 @@ spring:
     multipart:
       # 大小限制
       max-file-size: 10MB
+  rabbitmq:
+    host: 118.25.27.171
+    port: 5672
+    password: 123456
+    username: admin
+    virtual-host: /
 server:
   address: 0.0.0.0
   port: 8101

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.google.gson.Gson;
 import com.yupi.springbootinit.annotation.AuthCheck;
+import com.yupi.springbootinit.bizmq.BiMessageProducer;
 import com.yupi.springbootinit.common.BaseResponse;
 import com.yupi.springbootinit.common.DeleteRequest;
 import com.yupi.springbootinit.common.ErrorCode;
@@ -41,6 +42,8 @@ import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.io.File;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 帖子接口
@@ -62,7 +65,14 @@ public class ChartController {
     @Resource
     private AiManager aiManager;
 
-    public static final long biModelId = 1679321034651721729L;
+    @Resource
+    private ThreadPoolExecutor threadPoolExecutor;
+
+
+    @Resource
+    private BiMessageProducer biMessageProducer;
+
+    private final static long biModelId = CommonConstant.BI_MODEL_ID;
 
     private final static Gson GSON = new Gson();
 
@@ -229,16 +239,16 @@ public class ChartController {
 
 
     /**
-     * 智能分析
+     * 智能分析异步
      *
      * @param multipartFile
      * @param genChartByAiRequest
      * @param request
      * @return
      */
-    @PostMapping("/gen")
-    public BaseResponse<BiResponse> genChartByAi(@RequestPart("file") MultipartFile multipartFile,
-                                             GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+    @PostMapping("/gen/async")
+    public BaseResponse<BiResponse> genChartByAiAsync(@RequestPart("file") MultipartFile multipartFile,
+                                                 GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
         String name = genChartByAiRequest.getName();
         String goal = genChartByAiRequest.getGoal();
         String chartType = genChartByAiRequest.getChartType();
@@ -259,6 +269,151 @@ public class ChartController {
 //                "{前端 Echarts V5 的 option 配置对象js代码，合理地将数据进行可视化,不要生成任何多余的内容,比如注释}\n" +
 //                "【【【【【\n" +
 //                "{明确的数据分析结论、越详细越好，不要生成多余的注释}" ;
+        StringBuilder userInput = new StringBuilder();
+        userInput.append("分析需求:").append("\n");
+        String userGoal = goal;
+        if(StringUtils.isNotBlank(chartType)){
+            userGoal += ",请使用" + chartType;
+        }
+        userInput.append(userGoal).append("\n");
+        userInput.append("原始数据:").append("\n");
+        String stringResults = ExcelUtils.excelToCsv(multipartFile);
+        userInput.append(stringResults).append("\n");
+
+        Chart chart = new Chart();
+        chart.setName(name);
+        chart.setGoal(goal);
+        chart.setChartData(stringResults);
+        chart.setChartType(chartType);
+        chart.setStatus("wait");
+        chart.setUserId(loginUser.getId());
+        boolean saveResult = chartService.save(chart);
+        ThrowUtils.throwIf(!saveResult,ErrorCode.SYSTEM_ERROR,"图表保存失败");
+        CompletableFuture.runAsync(() ->{
+            Chart updateChart = new Chart();
+            updateChart.setId(chart.getId());
+            updateChart.setStatus("running");
+            boolean b = chartService.updateById(updateChart);
+            if(!b){
+                handleCHartUpdateError(chart.getId(),"更新图表执行中状态失败");
+                return;
+            }
+            String result = aiManager.doChat(biModelId, userInput.toString());
+            String[] splits = result.split("【【【【【");
+            if(splits.length < 3){
+                handleCHartUpdateError(chart.getId(),"AI生成错误");
+                return;
+            }
+            String genChart = splits[1].trim();
+            String genResult = splits[2].trim();
+            //插入数据至数据库
+            Chart updateChartResult = new Chart();
+            updateChartResult.setId(chart.getId());
+            updateChartResult.setGenChart(genChart);
+            updateChartResult.setGenResult(genResult);
+            updateChartResult.setStatus("succeed");
+            boolean updateResult = chartService.updateById(updateChartResult);
+            if(!updateResult){
+                handleCHartUpdateError(chart.getId(),"更新图表成功状态失败");
+
+            }
+        },threadPoolExecutor);
+
+        BiResponse biResponse = new BiResponse();
+        biResponse.setChartId(chart.getId());
+        return ResultUtils.success(biResponse);
+    }
+
+    /**
+     * 智能分析异步
+     *
+     * @param multipartFile
+     * @param genChartByAiRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/gen/async/mq")
+    public BaseResponse<BiResponse> genChartByAiAsyncMQ(@RequestPart("file") MultipartFile multipartFile,
+                                                      GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+        String name = genChartByAiRequest.getName();
+        String goal = genChartByAiRequest.getGoal();
+        String chartType = genChartByAiRequest.getChartType();
+        //校验
+        ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR,"目标为空");
+        ThrowUtils.throwIf(StringUtils.isNotBlank(goal) && name.length() > 100, ErrorCode.PARAMS_ERROR,"目标过长 ");
+        User loginUser = userService.getLoginUser(request);
+
+        //用户输入
+//        final String prompt = "\n" +
+//                "你是一个数据分析师和前端开发专家，接下来我会按照以下固定格式给你提供内容：\n" +
+//                "分析需求:\n" +
+//                "(数据分析的需求或者目标)\n" +
+//                "原始数据:\n" +
+//                "{csv格式的原始数据,用,作为分隔符}\n" +
+//                "请根据这两部分内容,按照以下指定格式生成内容(此外不要输出任何多余的开头、结尾、注释)\n" +
+//                "【【【【【\n" +
+//                "{前端 Echarts V5 的 option 配置对象js代码，合理地将数据进行可视化,不要生成任何多余的内容,比如注释}\n" +
+//                "【【【【【\n" +
+//                "{明确的数据分析结论、越详细越好，不要生成多余的注释}" ;
+        StringBuilder userInput = new StringBuilder();
+        userInput.append("分析需求:").append("\n");
+        String userGoal = goal;
+        if(StringUtils.isNotBlank(chartType)){
+            userGoal += ",请使用" + chartType;
+        }
+        userInput.append(userGoal).append("\n");
+        userInput.append("原始数据:").append("\n");
+        String stringResults = ExcelUtils.excelToCsv(multipartFile);
+        userInput.append(stringResults).append("\n");
+
+        Chart chart = new Chart();
+        chart.setName(name);
+        chart.setGoal(goal);
+        chart.setChartData(stringResults);
+        chart.setChartType(chartType);
+        chart.setStatus("wait");
+        chart.setUserId(loginUser.getId());
+        boolean saveResult = chartService.save(chart);
+        ThrowUtils.throwIf(!saveResult,ErrorCode.SYSTEM_ERROR,"图表保存失败");
+        long newChartId = chart.getId();
+        biMessageProducer.sendMessage(String.valueOf(newChartId));
+        BiResponse biResponse = new BiResponse();
+        biResponse.setChartId(newChartId);
+        return ResultUtils.success(biResponse);
+    }
+
+
+
+    private void handleCHartUpdateError(long chartId,String execMessage){
+        Chart updateResultChart = new Chart();
+        updateResultChart.setId(chartId);
+        updateResultChart.setStatus("failed");
+        updateResultChart.setExecMessage(execMessage);
+        boolean updateResult = chartService.updateById(updateResultChart);
+        if(!updateResult){
+            log.error("更新图表失败"+chartId+"，"+execMessage);
+        }
+    }
+
+    /**
+     * 智能分析
+     *
+     * @param multipartFile
+     * @param genChartByAiRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/gen")
+    public BaseResponse<BiResponse> genChartByAi(@RequestPart("file") MultipartFile multipartFile,
+                                             GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+        String name = genChartByAiRequest.getName();
+        String goal = genChartByAiRequest.getGoal();
+        String chartType = genChartByAiRequest.getChartType();
+        //校验
+        ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR,"目标为空");
+        ThrowUtils.throwIf(StringUtils.isNotBlank(goal) && name.length() > 100, ErrorCode.PARAMS_ERROR,"目标过长 ");
+        User loginUser = userService.getLoginUser(request);
+
         StringBuilder userInput = new StringBuilder();
         userInput.append("分析需求:").append("\n");
         String userGoal = goal;
